@@ -9,4 +9,4 @@
 	url = https://github.com/xtech/definitions-open-mower.git
 [submodule "src/lib/ros_ntrip_client"]
 	path = src/lib/ros_ntrip_client
-	url = https://github.com/olliewalsh/ros_ntrip_client.git
+	url = https://github.com/laberge1/ros_ntrip_client.git
