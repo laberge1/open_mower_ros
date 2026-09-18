@@ -335,6 +335,10 @@ jobs:
           # open_mower_ros commit that produced it.
           SOURCE_REPO: ${{ github.repository }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::REPO_DISPATCH_TOKEN is not configured; skipping the upstream OS build dispatch"
+            exit 0
+          fi
           if [ -z "$DIGEST" ]; then
             echo "No manifest digest (manifest step skipped, e.g. a filtered workflow_dispatch run) -- nothing to dispatch"
             exit 0
