@@ -44,6 +44,7 @@
 #include "mbf_msgs/MoveBaseAction.h"
 #include "mbf_msgs/RecoveryAction.h"
 #include "mower_logic/MowerLogicConfig.h"
+#include "mower_logic/docking_config.h"
 #include "mower_logic/utils.h"
 #include "mower_map/ClearMapSrv.h"
 #include "mower_map/ClearNavPointSrv.h"
@@ -147,6 +148,8 @@ ll::PowerConfig getPowerConfig() {
 void setConfig(mower_logic::MowerLogicConfig c) {
   {
     std::lock_guard<std::recursive_mutex> lk{mower_logic_mutex};
+    // Internal updates must preserve the direction latched by the startup callback as well.
+    c.docking_reverse = last_config.docking_reverse;
     last_config = c;
   }
   // outside of mower_logic_mutex: reconfigureCB takes it while dynamic_reconfigure holds its own lock, holding
@@ -799,6 +802,13 @@ void reconfigureCB(mower_logic::MowerLogicConfig& c, uint32_t level) {
   ROS_INFO_STREAM("om_mower_logic: Setting mower_logic config");
   // the mowing.plan rpc reads it from its own thread
   std::lock_guard<std::recursive_mutex> lk{mower_logic_mutex};
+  static docking::StartupDirection docking_direction;
+  if (!docking_direction.Apply(c.docking_reverse)) {
+    ROS_WARN("Changing docking_reverse requires restarting mower_logic. Keeping the startup value.");
+  }
+  if (!docking::ConfigurationSupported(c.docking_reverse, c.perimeter_signal)) {
+    ROS_ERROR("Reverse docking is not supported with perimeter docking. Docking and undocking will be refused.");
+  }
   last_config = c;
 }
 

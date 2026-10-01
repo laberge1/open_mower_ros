@@ -1,2 +1,5 @@
 ll:
   board: "YardForce-V1"
+
+mower_logic:
+  docking_reverse: false

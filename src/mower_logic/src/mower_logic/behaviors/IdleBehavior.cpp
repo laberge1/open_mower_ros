@@ -19,6 +19,8 @@
 #include <mower_msgs/Power.h>
 
 #include "PerimeterDocking.h"
+#include "mower_logic/docking.h"
+#include "mower_logic/docking_config.h"
 #include "mower_logic/utils.h"
 
 extern void stopMoving();
@@ -65,7 +67,7 @@ Behavior* IdleBehavior::execute() {
 
   setGPS(false);
   geometry_msgs::PoseStamped docking_pose_stamped;
-  docking_pose_stamped.pose = get_docking_point_srv.response.docking_pose;
+  docking_pose_stamped.pose = docking::DockedPose(get_docking_point_srv.response.docking_pose, config.docking_reverse);
   docking_pose_stamped.header.frame_id = "map";
   docking_pose_stamped.header.stamp = ros::Time::now();
 
@@ -121,8 +123,9 @@ Behavior* IdleBehavior::execute() {
     // we sit here idle-docked waiting for automatic_mode / mower_ready / etc.
     const bool currently_docked = last_charge_v > 5.0;
     if (currently_docked) {
-      if (!pose_synced_to_dock) {
-        if (!PerimeterUndockingBehavior::configured(config)) {
+      if (!pose_synced_to_dock &&
+          docking::ConfigurationSupported(last_config.docking_reverse, last_config.perimeter_signal)) {
+        if (!PerimeterUndockingBehavior::configured(last_config)) {
           ROS_INFO_STREAM("Currently inside the docking station, we set the robot's pose to the docks pose.");
           setRobotPose(docking_pose_stamped.pose);
         }
@@ -134,12 +137,19 @@ Behavior* IdleBehavior::execute() {
 
     if (manual_start_mowing || ((automatic_mode || active_semiautomatic_task) && mower_ready)) {
       if (currently_docked) {
-        if (PerimeterUndockingBehavior::configured(config)) return &PerimeterUndockingBehavior::INSTANCE;
-        return &UndockingBehavior::INSTANCE;
+        if (!docking::ConfigurationSupported(last_config.docking_reverse, last_config.perimeter_signal)) {
+          ROS_ERROR_THROTTLE(5.0,
+                             "Reverse docking is not supported with perimeter docking. Set perimeter_signal to 0.");
+          manual_start_mowing = false;
+        } else {
+          if (PerimeterUndockingBehavior::configured(last_config)) return &PerimeterUndockingBehavior::INSTANCE;
+          return &UndockingBehavior::INSTANCE;
+        }
+      } else {
+        // Not docked, so just mow
+        setGPS(true);
+        return &MowingBehavior::INSTANCE;
       }
-      // Not docked, so just mow
-      setGPS(true);
-      return &MowingBehavior::INSTANCE;
     }
 
     if (start_area_recorder) {
@@ -151,7 +161,8 @@ Behavior* IdleBehavior::execute() {
       return &IdleBehavior::INSTANCE;
     }
 
-    if (last_config.docking_redock && stay_docked && last_charge_v < 5.0) {
+    if (last_config.docking_redock && stay_docked && last_charge_v < 5.0 &&
+        docking::ConfigurationSupported(last_config.docking_reverse, last_config.perimeter_signal)) {
       ROS_WARN("We docked but seem to have lost contact with the charger.  Undocking and trying again!");
       return &UndockingBehavior::RETRY_INSTANCE;
     }

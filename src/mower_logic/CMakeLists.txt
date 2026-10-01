@@ -255,3 +255,12 @@ target_link_libraries(monitoring ${catkin_LIBRARIES})
 
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
+
+if(CATKIN_ENABLE_TESTING)
+    catkin_add_gtest(test_docking_geometry test/test_docking_geometry.cpp)
+    catkin_add_gtest(test_docking_ros test/test_docking_ros.cpp)
+    if(TARGET test_docking_ros)
+        add_dependencies(test_docking_ros ${catkin_EXPORTED_TARGETS})
+        target_link_libraries(test_docking_ros ${catkin_LIBRARIES})
+    endif()
+endif()

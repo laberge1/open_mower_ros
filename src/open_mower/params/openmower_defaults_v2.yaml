@@ -34,6 +34,7 @@ ntrip_client:
   max_attempts: 0
 
 mower_logic:
+  docking_reverse: false
   automatic_mode: 0
   docking_approach_distance: 1.5
   docking_extra_time: 0
