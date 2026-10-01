@@ -17,6 +17,8 @@
 #include <mower_msgs/Power.h>
 
 #include "PerimeterDocking.h"
+#include "mower_logic/docking.h"
+#include "mower_logic/docking_config.h"
 #include "mower_logic/utils.h"
 
 extern ros::ServiceClient dockingPointClient;
@@ -45,18 +47,14 @@ DockingBehavior::DockingBehavior() {
 bool DockingBehavior::approach_docking_point() {
   ROS_INFO_STREAM("Calculating approach path");
 
-  // Calculate a docking approaching point behind the actual docking point
-  tf2::Quaternion quat;
-  tf2::fromMsg(docking_pose_stamped.pose.orientation, quat);
-  tf2::Matrix3x3 m(quat);
-  double roll, pitch, yaw;
-  m.getRPY(roll, pitch, yaw);
+  const auto recorded_pose = docking::PlanarPose(docking_pose_stamped.pose);
 
-  // Get the approach start point
+  // Navigate forward to the approach start and finish facing in the docking direction.
   {
     geometry_msgs::PoseStamped docking_approach_point = docking_pose_stamped;
-    docking_approach_point.pose.position.x -= cos(yaw) * config.docking_approach_distance;
-    docking_approach_point.pose.position.y -= sin(yaw) * config.docking_approach_distance;
+    docking_approach_point.pose = docking::WithPlanarPose(
+        docking_pose_stamped.pose,
+        docking::PoseOnDockingLine(recorded_pose, config.docking_reverse, -config.docking_approach_distance));
     mbf_msgs::MoveBaseGoal moveBaseGoal;
     moveBaseGoal.target_pose = docking_approach_point;
     moveBaseGoal.controller = "FTCPlanner";
@@ -74,23 +72,20 @@ bool DockingBehavior::approach_docking_point() {
 
     ros::Time start_wait_time = ros::Time::now();
     ros::Rate loop_rate(100);
-    while (ros::ok() && (ros::Time::now() - start_wait_time) < ros::Duration(config.docking_waiting_time)) {
+    while (ros::ok() && !aborted && (ros::Time::now() - start_wait_time) < ros::Duration(config.docking_waiting_time)) {
       loop_rate.sleep();
     }
 
-    int dock_point_count = config.docking_approach_distance * 10.0;
-    for (int i = 0; i <= dock_point_count; i++) {
-      geometry_msgs::PoseStamped docking_pose_stamped_front = docking_pose_stamped;
-      docking_pose_stamped_front.pose.position.x -= cos(yaw) * ((dock_point_count - i) / 10.0);
-      docking_pose_stamped_front.pose.position.y -= sin(yaw) * ((dock_point_count - i) / 10.0);
-      path.poses.push_back(docking_pose_stamped_front);
-    }
+    path = docking::RosPath(docking_pose_stamped, docking::StraightDockingPath(recorded_pose, config.docking_reverse,
+                                                                               -config.docking_approach_distance, 0.0));
+    if (path.poses.empty()) return !aborted && ros::ok();
+    if (aborted || !ros::ok()) return false;
 
     exePathGoal.path = path;
     exePathGoal.angle_tolerance = 1.0 * (M_PI / 180.0);
     exePathGoal.dist_tolerance = 0.1;
     exePathGoal.tolerance_from_action = true;
-    exePathGoal.controller = "FTCPlanner";
+    exePathGoal.controller = config.docking_reverse ? "DockingFTCPlanner" : "FTCPlanner";
     ROS_INFO_STREAM("Executing Docking Approach");
 
     auto approachResult = sendGoalAndWaitUnlessAborted(mbfClientExePath, exePathGoal);
@@ -103,25 +98,19 @@ bool DockingBehavior::approach_docking_point() {
 }
 
 bool DockingBehavior::dock_straight() {
-  tf2::Quaternion quat;
-  tf2::fromMsg(docking_pose_stamped.pose.orientation, quat);
-  tf2::Matrix3x3 m(quat);
-  double roll, pitch, yaw;
-  m.getRPY(roll, pitch, yaw);
-
   mbf_msgs::ExePathGoal exePathGoal;
-
-  nav_msgs::Path path;
-
-  int dock_point_count = config.docking_distance * 10.0;
-  for (int i = 0; i < dock_point_count; i++) {
-    geometry_msgs::PoseStamped docking_pose_stamped_front = docking_pose_stamped;
-    docking_pose_stamped_front.pose.position.x += cos(yaw) * (i / 10.0);
-    docking_pose_stamped_front.pose.position.y += sin(yaw) * (i / 10.0);
-    path.poses.push_back(docking_pose_stamped_front);
+  exePathGoal.path = docking::RosPath(
+      docking_pose_stamped, docking::StraightDockingPath(docking::PlanarPose(docking_pose_stamped.pose),
+                                                         config.docking_reverse, 0.0, config.docking_distance));
+  if (aborted || !ros::ok()) return false;
+  if (exePathGoal.path.poses.empty()) {
+    stopMoving();
+    const auto power = getPower();
+    const bool docked = utils::GetFirstValid({power.charge_voltage_adc, power.charge_voltage}) > 5.0;
+    if (docked) publishMowerEvent("DOCKED");
+    return docked;
   }
 
-  exePathGoal.path = path;
   exePathGoal.angle_tolerance = 1.0 * (M_PI / 180.0);
   exePathGoal.dist_tolerance = 0.1;
   exePathGoal.tolerance_from_action = true;
@@ -135,7 +124,7 @@ bool DockingBehavior::dock_straight() {
   ros::Rate r(10);
 
   // we can assume the last_state is current since we have a security timer
-  while (waitingForResult) {
+  while (ros::ok() && waitingForResult) {
     r.sleep();
 
     const auto last_status = getStatus();
@@ -147,7 +136,7 @@ bool DockingBehavior::dock_straight() {
       mbfClientExePath->cancelGoal();
       stopMoving();
       dockingSuccess = false;
-      waitingForResult = false;
+      break;
     }
 
     // Use first valid sensor
@@ -159,11 +148,12 @@ bool DockingBehavior::dock_straight() {
         // currently moving. Cancel as soon as we're in the station
         if (last_charge_v > 5.0) {
           ROS_INFO_STREAM("Got a voltage of " << last_charge_v << " V. Cancelling docking.");
-          ros::Duration(config.docking_extra_time).sleep();
+          const auto contact_deadline = ros::Time::now() + ros::Duration(config.docking_extra_time);
+          while (ros::ok() && !aborted && ros::Time::now() < contact_deadline) r.sleep();
           mbfClientExePath->cancelGoal();
           stopMoving();
-          dockingSuccess = true;
-          publishMowerEvent("DOCKED");
+          dockingSuccess = !aborted && ros::ok();
+          if (dockingSuccess) publishMowerEvent("DOCKED");
           waitingForResult = false;
         }
         break;
@@ -197,6 +187,16 @@ std::string DockingBehavior::state_name() {
 }
 
 Behavior* DockingBehavior::execute() {
+  if (!docking::ConfigurationSupported(config.docking_reverse, config.perimeter_signal)) {
+    ROS_ERROR("Reverse docking is not supported with perimeter docking. Set perimeter_signal to 0.");
+    stopMoving();
+    publishMowerEvent("DOCKING_FAILED", json{{"reason", "unsupported_docking_configuration"}});
+    return &IdleBehavior::INSTANCE;
+  }
+  if (aborted) {
+    stopMoving();
+    return &IdleBehavior::INSTANCE;
+  }
   // Check if already docked (e.g. carried to base during emergency) and skip
   if (getPower().charge_voltage > 5.0 || getPower().charge_voltage_adc > 5.0) {
     ROS_INFO_STREAM("Already inside docking station, going directly to idle.");
@@ -286,7 +286,11 @@ void DockingBehavior::enter() {
 
   // Get the docking pose in map
   mower_map::GetDockingPointSrv get_docking_point_srv;
-  dockingPointClient.call(get_docking_point_srv);
+  if (!dockingPointClient.call(get_docking_point_srv)) {
+    ROS_ERROR("Cannot get the docking pose. Docking cancelled.");
+    aborted = true;
+    return;
+  }
   docking_pose_stamped.pose = get_docking_point_srv.response.docking_pose;
   docking_pose_stamped.header.frame_id = "map";
   docking_pose_stamped.header.stamp = ros::Time::now();

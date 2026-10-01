@@ -16,7 +16,8 @@
 
 #include <mower_msgs/Power.h>
 
-#include "tf2_eigen/tf2_eigen.h"
+#include "mower_logic/docking.h"
+#include "mower_logic/docking_config.h"
 
 extern ros::ServiceClient dockingPointClient;
 extern actionlib::SimpleActionClient<mbf_msgs::ExePathAction>* mbfClientExePath;
@@ -49,37 +50,31 @@ std::string UndockingBehavior::state_name() {
 }
 
 Behavior* UndockingBehavior::execute() {
+  if (!docking::ConfigurationSupported(config.docking_reverse, config.perimeter_signal)) {
+    ROS_ERROR("Reverse docking is not supported with perimeter docking. Set perimeter_signal to 0.");
+    stopMoving();
+    publishMowerEvent("UNDOCKING_FAILED", json{{"reason", "unsupported_docking_configuration"}});
+    return &IdleBehavior::INSTANCE;
+  }
+  if (aborted) {
+    stopMoving();
+    return &IdleBehavior::INSTANCE;
+  }
   static bool rng_seeding_required = true;
 
   // get robot's current pose from odometry.
   xbot_msgs::AbsolutePose pose = getPose();
-  tf2::Quaternion quat;
-  tf2::fromMsg(pose.pose.pose.orientation, quat);
-  tf2::Matrix3x3 m(quat);
-  double roll, pitch, yaw;
-  m.getRPY(roll, pitch, yaw);
-
   mbf_msgs::ExePathGoal exePathGoal;
-
-  nav_msgs::Path path;
 
   ros::Time start_wait_time = ros::Time::now();
   ros::Rate loop_rate(100);
-  while (ros::ok() && (ros::Time::now() - start_wait_time) < ros::Duration(config.undocking_waiting_time)) {
+  while (ros::ok() && !aborted && (ros::Time::now() - start_wait_time) < ros::Duration(config.undocking_waiting_time)) {
     loop_rate.sleep();
   }
 
-  geometry_msgs::PoseStamped docking_pose_stamped_front;
-  docking_pose_stamped_front.pose = pose.pose.pose;
-  docking_pose_stamped_front.header = pose.header;
-
-  const int straight_undock_point_count = 3;  // The FTC planner requires at least 3 points to work
-  double incremental_distance = config.undock_distance / straight_undock_point_count;
-  path.poses.push_back(docking_pose_stamped_front);  // Start from current position
-  for (int i = 0; i < straight_undock_point_count; i++) {
-    docking_pose_stamped_front.pose.position.x -= cos(yaw) * incremental_distance;
-    docking_pose_stamped_front.pose.position.y -= sin(yaw) * incremental_distance;
-    path.poses.push_back(docking_pose_stamped_front);
+  if (aborted || !ros::ok()) {
+    stopMoving();
+    return &IdleBehavior::INSTANCE;
   }
 
   double angle;
@@ -99,21 +94,20 @@ Behavior* UndockingBehavior::execute() {
     angle = random_angle_deg * M_PI / 180.0;
   }
 
-  const int angled_undock_point_count = 10;
-  incremental_distance = config.undock_angled_distance / angled_undock_point_count;
-  for (int i = 0; i < angled_undock_point_count; i++) {
-    double orientation = yaw + angle * (config.undock_use_curve ? ((i + 1.0) / angled_undock_point_count) : 1);
-
-    docking_pose_stamped_front.pose.position.x -= cos(orientation) * incremental_distance;
-    docking_pose_stamped_front.pose.position.y -= sin(orientation) * incremental_distance;
-
-    tf2::Quaternion q;
-    q.setRPY(0.0, 0.0, orientation);
-    docking_pose_stamped_front.pose.orientation = tf2::toMsg(q);
-    path.poses.push_back(docking_pose_stamped_front);
+  geometry_msgs::PoseStamped start_pose;
+  start_pose.pose = pose.pose.pose;
+  start_pose.header = pose.header;
+  exePathGoal.path =
+      docking::RosPath(start_pose, docking::UndockingPath(docking::PlanarPose(start_pose.pose), config.docking_reverse,
+                                                          config.undock_distance, config.undock_angled_distance, angle,
+                                                          config.undock_use_curve));
+  if (exePathGoal.path.poses.empty()) {
+    ROS_ERROR("No undocking distance configured. Staying idle.");
+    stopMoving();
+    publishMowerEvent("UNDOCKING_FAILED", json{{"reason", "empty_undocking_path"}});
+    return &IdleBehavior::INSTANCE;
   }
 
-  exePathGoal.path = path;
   exePathGoal.angle_tolerance = 1.0 * (M_PI / 180.0);
   exePathGoal.dist_tolerance = 0.1;
   exePathGoal.tolerance_from_action = true;
@@ -164,13 +158,18 @@ void UndockingBehavior::enter() {
 
   // Get the docking pose in map
   mower_map::GetDockingPointSrv get_docking_point_srv;
-  dockingPointClient.call(get_docking_point_srv);
-  docking_pose_stamped.pose = get_docking_point_srv.response.docking_pose;
+  if (!dockingPointClient.call(get_docking_point_srv)) {
+    ROS_ERROR("Cannot get the docking pose. Undocking cancelled.");
+    aborted = true;
+    return;
+  }
+  docking_pose_stamped.pose = docking::DockedPose(get_docking_point_srv.response.docking_pose, config.docking_reverse);
   docking_pose_stamped.header.frame_id = "map";
   docking_pose_stamped.header.stamp = ros::Time::now();
 
   // set the robot's position to the dock if we're actually docked
-  if (getPower().charge_voltage_adc > 5.0 || getPower().charge_voltage > 5.0) {
+  if (docking::ConfigurationSupported(config.docking_reverse, config.perimeter_signal) &&
+      (getPower().charge_voltage_adc > 5.0 || getPower().charge_voltage > 5.0)) {
     ROS_INFO_STREAM("Currently inside the docking station, we set the robot's pose to the docks pose.");
     setRobotPose(docking_pose_stamped.pose);
   }

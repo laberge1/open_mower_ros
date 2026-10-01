@@ -15,6 +15,7 @@
 #include "ros/ros.h"
 
 // Include messages for mower control
+#include <mower_map/docking_geometry.h>
 #include <mower_msgs/ESCStatus.h>
 #include <mower_msgs/Emergency.h>
 #include <mower_msgs/Power.h>
@@ -90,6 +91,9 @@ int main(int argc, char** argv) {
         tf2::Matrix3x3 m(quat);
         double roll, pitch, yaw;
         m.getRPY(roll, pitch, yaw);
+        bool docking_reverse = false;
+        n.param("/mower_logic/docking_reverse", docking_reverse, false);
+        yaw = docking::RobotDockHeading(yaw, docking_reverse);
         robot.SetDockingPose(docking_pose.position.x, docking_pose.position.y, yaw);
         robot.SetPosition(docking_pose.position.x, docking_pose.position.y, yaw);
         docked = true;

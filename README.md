@@ -27,6 +27,8 @@ The Docker images have a `-legacy` suffix or `releases-` prefix: (e.g. `releases
 
 ## Getting started
 
+For stations with rear charging contacts, see [reverse docking](docs/reverse-docking.md).
+
 ### Running on your machine
 
 OpenMower requires ROS Noetic. ([installation instruction](http://wiki.ros.org/noetic/Installation)) There is no distributed release package yet, for development and test purpose it's best to build the workspace on your own.

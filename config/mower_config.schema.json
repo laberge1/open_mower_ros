@@ -333,11 +333,18 @@
       "title": "Mower Logic Settings",
       "type": "object",
       "properties": {
+        "OM_DOCKING_REVERSE": {
+          "type": "boolean",
+          "default": false,
+          "title": "Reverse Docking",
+          "description": "Back into the station and drive forward to undock. Requires a restart. Supported only with perimeter docking disabled.",
+          "x-environment-variable": "OM_DOCKING_REVERSE"
+        },
         "OM_DOCKING_DISTANCE": {
           "type": "number",
           "default": 1.0,
           "title": "Docking Distance",
-          "description": "Distance in [m] to drive forward after docking.",
+          "description": "Distance in [m] to drive toward the station after reaching the recorded docking point.",
           "x-environment-variable": "OM_DOCKING_DISTANCE"
         },
         "OM_DOCKING_APPROACH_DISTANCE": {

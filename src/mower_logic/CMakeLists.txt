@@ -193,6 +193,8 @@ add_executable(mower_logic
 )
 add_dependencies(mower_logic ${catkin_EXPORTED_TARGETS} ${${PROJECT_NAME}_EXPORTED_TARGETS})
 target_link_libraries(mower_logic ${catkin_LIBRARIES} ${CRYPTOPP_LIBRARIES} nlohmann_json::nlohmann_json)
+# xbot_mqtt headers need C++17 (like mower_map)
+target_compile_features(mower_logic PRIVATE cxx_std_17)
 
 add_executable(monitoring src/monitoring/monitoring.cpp)
 add_dependencies(monitoring ${catkin_EXPORTED_TARGETS} ${${PROJECT_NAME}_EXPORTED_TARGETS})
@@ -253,3 +255,12 @@ target_link_libraries(monitoring ${catkin_LIBRARIES})
 
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
+
+if(CATKIN_ENABLE_TESTING)
+    catkin_add_gtest(test_docking_geometry test/test_docking_geometry.cpp)
+    catkin_add_gtest(test_docking_ros test/test_docking_ros.cpp)
+    if(TARGET test_docking_ros)
+        add_dependencies(test_docking_ros ${catkin_EXPORTED_TARGETS})
+        target_link_libraries(test_docking_ros ${catkin_LIBRARIES})
+    endif()
+endif()

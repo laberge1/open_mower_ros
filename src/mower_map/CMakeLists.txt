@@ -120,7 +120,7 @@ generate_messages(
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-        #  INCLUDE_DIRS include
+        INCLUDE_DIRS include
         #  LIBRARIES mower_map
         #  CATKIN_DEPENDS other_catkin_pkg
         #  DEPENDS system_lib
@@ -135,7 +135,7 @@ add_subdirectory(../lib/json json EXCLUDE_FROM_ALL)
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
 include_directories(
-        # include
+        include
          ${catkin_INCLUDE_DIRS}
 )
 
@@ -227,3 +227,6 @@ target_link_libraries(mower_map_service ${catkin_LIBRARIES} ${OpenCV_LIBS} nlohm
 
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
+
+install(DIRECTORY include/${PROJECT_NAME}/
+        DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})

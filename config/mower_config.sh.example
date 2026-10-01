@@ -165,7 +165,10 @@ export OM_UNDOCKING_WAIT_TIME=0.0
 # Has to be at least the length from the dock to your nav- or mow-area, otherwise docking will fail!
 # export OM_DOCKING_APPROACH_DISTANCE=1.5
 #
-# The distance to drive forward AFTER reaching the second docking point
+# Back into the station and drive forward to undock. Restart after changing. GPS straight docking only.
+# export OM_DOCKING_REVERSE=False
+#
+# The distance to drive toward the station AFTER reaching the second docking point
 export OM_DOCKING_DISTANCE=1.0
 #
 # Extra time (s) to continue docking after detecting voltage
